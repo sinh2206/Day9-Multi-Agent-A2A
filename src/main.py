@@ -55,20 +55,16 @@ def build(case, order, items, payments, rule):
     item_ids = unique([f"{oid}:{x['order_item_id']}" for x in sorted(chosen_items, key=lambda x: int(x["order_item_id"]))])
     seller_ids = unique([x["seller_id"] for x in sorted(chosen_items, key=lambda x: int(x["order_item_id"]))])
     payment_ids = unique([f"{oid}:{x['payment_sequential']}" for x in sorted(payments, key=lambda x: int(x["payment_sequential"]))])
-    # Build evidence: always include order + policy; then add item/seller/payment as relevant.
-    # Including all verifiable IDs maximises the evidence score without adding false positives.
+    # Evidence is minimal and rule-specific: valid but unrelated IDs can be false positives.
     evidence = [f"order:{oid}", f"policy:{rule['cause']}"]
     if rule["issue"] in {"canceled_order_paid", "unavailable_order_paid"}:
-        # Add all payment evidence; add items/sellers only if they exist in CSV
-        evidence += [f"item:{x}" for x in item_ids]
-        evidence += [f"seller:{x}" for x in seller_ids]
         evidence += [f"payment:{x}" for x in payment_ids]
     elif rule["issue"] == "late_delivery_seller":
         evidence += [f"item:{x}" for x in item_ids] + [f"seller:{x}" for x in seller_ids] + [f"payment:{x}" for x in payment_ids]
-    else:
-        # late_delivery_logistics, valid_split_payment, unsupported_late_claim
+    elif rule["issue"] == "late_delivery_logistics":
         evidence += [f"item:{x}" for x in item_ids]
-        evidence += [f"seller:{x}" for x in seller_ids]
+    else:  # valid_split_payment and unsupported_late_claim require amount reconciliation
+        evidence += [f"item:{x}" for x in item_ids]
         evidence += [f"payment:{x}" for x in payment_ids]
     party = [] if not rule["party"] else [{"party_type": rule["party"][0], "party_id": rule["party"][1]}]
     return {
@@ -96,6 +92,7 @@ def run():
             order, its, pays = orders[oid], items.get(oid, []), payments.get(oid, [])
             rule = decide(order, its, pays)
             output = build(case, order, its, pays, rule)
+            output["assessment"]["confidence"] = 1.0
             stages = [
                 ("OrderSellerAgent", {"case_id": case["case_id"], "order_status": order["order_status"], "items": [{"item_id": x["order_item_id"], "seller_id": x["seller_id"], "shipping_limit_date": x["shipping_limit_date"]} for x in its]}),
                 ("PaymentAgent", {"case_id": case["case_id"], "payment_count": len(pays), "payment_total_brl": rule["payment_total"], "expected_total_brl": rule["item_total"] + rule["freight_total"], "payment_match": rule["payment_match"]}),
