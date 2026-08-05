@@ -7,6 +7,11 @@ from agents import MODEL, handoff
 from policy import decide
 from validator import valid
 
+QUOTA_EXHAUSTED_AUDIT = {
+    "verdict": "quota_exhausted",
+    "audit_vi": "Hết quota API free tier (429); PolicyAgent chạy deterministic fallback — quyết định từ policy.py."
+}
+
 ROOT = Path(__file__).resolve().parents[1]
 DATA, INPUT, OUTPUT, LOG = (ROOT / x for x in ("data", "input", "output", "logging"))
 
@@ -82,6 +87,7 @@ def run():
     payments = rows("olist_order_payments_dataset.csv", "order_id")
     OUTPUT.mkdir(exist_ok=True); LOG.mkdir(exist_ok=True)
     recovered = recoverable_policy_cases()
+    quota_exhausted = False  # Set to True on first 429; skip API for remaining cases
     with (LOG / "trace.jsonl").open("w", encoding="utf-8") as trace, (ROOT / "trace.jsonl").open("w", encoding="utf-8") as root_trace:
         for path in sorted(INPUT.glob("EC_*.json")):
             case = json.loads(path.read_text(encoding="utf-8")); oid = case["customer_request"]["claimed_order_id"]
@@ -97,9 +103,25 @@ def run():
             prior = []
             for agent, facts in stages:
                 if agent == "PolicyAgent" and case["case_id"] in recovered:
+                    # Previously attempted but got empty content — skip re-call
                     packet = {"agent": agent, "mode": "remote_llm_recovered", "model": MODEL, "facts": {"facts": facts, "prior_agents": prior}, "audit": {"verdict": "empty_content", "audit_vi": "Đã gọi API ở lượt chạy trước nhưng response không có content; không gọi lại để giữ quota."}}
+                elif agent == "PolicyAgent" and not quota_exhausted:
+                    # Attempt real LLM call; fall back to deterministic on 429
+                    try:
+                        packet = handoff(agent, {"facts": facts, "prior_agents": prior})
+                    except RuntimeError as exc:
+                        if "429" in str(exc):
+                            quota_exhausted = True
+                            packet = {"agent": agent, "mode": "deterministic_fallback", "model": None,
+                                      "facts": {"facts": facts, "prior_agents": prior}, "audit": QUOTA_EXHAUSTED_AUDIT}
+                        else:
+                            raise
+                elif agent == "PolicyAgent" and quota_exhausted:
+                    # Quota already known to be exhausted — skip API call entirely
+                    packet = {"agent": agent, "mode": "deterministic_fallback", "model": None,
+                              "facts": {"facts": facts, "prior_agents": prior}, "audit": QUOTA_EXHAUSTED_AUDIT}
                 else:
-                    packet = handoff(agent, {"facts": facts, "prior_agents": prior}) if agent == "PolicyAgent" else local_handoff(agent, facts)
+                    packet = local_handoff(agent, facts)
                 line = json.dumps(packet, ensure_ascii=False) + "\n"
                 trace.write(line); root_trace.write(line)
                 prior.append({"agent": agent, "audit": packet["audit"]})
