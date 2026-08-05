@@ -30,10 +30,10 @@
   },
   "evidence_ids": [
     "order:adc253f1977c81c2c29dc7b9dd23d538",
+    "policy:DELIVERY_WITHIN_ESTIMATE",
     "item:adc253f1977c81c2c29dc7b9dd23d538:1",
-    "payment:adc253f1977c81c2c29dc7b9dd23d538:1",
     "seller:c3867b4666c7d76867627c2f7fb22e21",
-    "policy:DELIVERY_WITHIN_ESTIMATE"
+    "payment:adc253f1977c81c2c29dc7b9dd23d538:1"
   ],
   "financial_resolution": {
     "currency": "BRL",
