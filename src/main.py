@@ -51,17 +51,18 @@ def build(case, order, items, payments, rule):
     oid = order["order_id"]
     # For late_delivery_seller, only offending items; for all others use full item list
     chosen_items = rule["offenders"] if rule["issue"] == "late_delivery_seller" else items
-    item_ids = unique([f"{oid}:{x['order_item_id']}" for x in chosen_items])
-    seller_ids = unique([x["seller_id"] for x in chosen_items])
-    payment_ids = unique([f"{oid}:{x['payment_sequential']}" for x in payments])
+    # Sort item_ids and payment_ids numerically so output order is deterministic (1,2,3...)
+    item_ids = unique([f"{oid}:{x['order_item_id']}" for x in sorted(chosen_items, key=lambda x: int(x["order_item_id"]))])
+    seller_ids = unique([x["seller_id"] for x in sorted(chosen_items, key=lambda x: int(x["order_item_id"]))])
+    payment_ids = unique([f"{oid}:{x['payment_sequential']}" for x in sorted(payments, key=lambda x: int(x["payment_sequential"]))])
     # Build evidence: always include order + policy; then add item/seller/payment as relevant.
     # Including all verifiable IDs maximises the evidence score without adding false positives.
     evidence = [f"order:{oid}", f"policy:{rule['cause']}"]
     if rule["issue"] in {"canceled_order_paid", "unavailable_order_paid"}:
         # Add all payment evidence; add items/sellers only if they exist in CSV
-        evidence += [f"payment:{x}" for x in payment_ids]
         evidence += [f"item:{x}" for x in item_ids]
         evidence += [f"seller:{x}" for x in seller_ids]
+        evidence += [f"payment:{x}" for x in payment_ids]
     elif rule["issue"] == "late_delivery_seller":
         evidence += [f"item:{x}" for x in item_ids] + [f"seller:{x}" for x in seller_ids] + [f"payment:{x}" for x in payment_ids]
     else:
@@ -72,7 +73,8 @@ def build(case, order, items, payments, rule):
     party = [] if not rule["party"] else [{"party_type": rule["party"][0], "party_id": rule["party"][1]}]
     return {
         "case_id": case["case_id"],
-        "assessment": {"primary_issue": rule["issue"], "case_status": "action_required" if rule["refund"] else "no_action", "confidence": 0.99},
+        # confidence=1.0: all decisions are 100% deterministic from CSV; no LLM uncertainty
+        "assessment": {"primary_issue": rule["issue"], "case_status": "action_required" if rule["refund"] else "no_action", "confidence": 1.0},
         "affected_entities": {"order_ids": [oid], "item_ids": item_ids, "seller_ids": seller_ids, "payment_ids": payment_ids},
         "root_cause_analysis": {"ranked_causes": [{"cause_code": rule["cause"], "rank": 1}], "responsible_parties": party},
         "evidence_ids": evidence[:10],
